@@ -1,0 +1,434 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+###OULAD Dataset - Take home exercise
+
+
+####Contents
+
+#####1.Data import and cleaning
+#####2.Data exploration
+#####3.Machine learning
+  
+
+####1.Data import and cleaning
+
+**Import Packages**
+
+dplyr and tidyverse contains almost most functionalities necessary for effective data 
+manipulation and visualization
+```
+
+```
+```{r,,message = FALSE}
+library(dplyr)
+library(ggplot2)
+library(randomForest)
+library(rpart)
+```
+
+**Read in all data files required for analysis**
+
+
+```{r,message = FALSE}
+setwd("C:/Users/dines/Downloads/OULAD/")
+#file_path = "C:/Users/dines/Downloads/OULAD/"
+assessments <- read.csv("assessments.csv")
+courses <- read.csv("courses.csv")
+studentAssessment <- read.csv("studentAssessment.csv")
+studentInfo <- read.csv("studentInfo.csv")
+studentRegistration <- read.csv("studentRegistration.csv")
+studentVle <- read.csv("studentVle.csv")
+vle <- read.csv("vle.csv")
+```
+
+
+**Check for duplicates**
+
+
+```{r,message = FALSE}
+nrow(assessments) - nrow(distinct(assessments))
+nrow(studentAssessment) - nrow(distinct(studentAssessment))
+nrow(studentInfo) - nrow(distinct(studentInfo))
+nrow(studentRegistration) - nrow(distinct(studentRegistration))
+nrow(studentVle) - nrow(distinct(studentVle))
+nrow(vle) - nrow(distinct(vle))
+nrow(courses) - nrow(distinct(courses))
+```
+
+Only StudentVle table shows recurring rows. 
+However, the data indicates that a student's interaction with the website on a single day, can occur multiple times, accessing the same material.
+There is also the chance the student puts in the same number of clicks each time he logs in to access it.
+
+Hence, we do not remove duplicates for this case
+
+Let's check out the table structure of some of the tables that we initially intend to use: 
+
+```{r,message = FALSE}
+str(studentVle)
+str(studentInfo)
+
+```
+
+We shall explore this in more detail now and deal with possible missing values/outliers as we go.
+
+####2.Data Exploration:
+
+Before we understand how the underlying data exists for each table, we can try joining few of the tables using the existing schema given 
+
+Combining tables of importance
+```{r, message = FALSE}
+
+J_std_vre_info <- inner_join(studentVle, studentInfo, by = NULL)
+
+#We consider students who have passed with distinction as Pass also and use this in a separate column
+
+J_std_vre_info <- J_std_vre_info %>% mutate(Result = 
+                                    ifelse(final_result == 'Distinction'|final_result ==                                                  'Pass','Pass',ifelse(final_result ==                                                                  'Withdrawn','Withdrawn','Fail')))
+
+J_std_vre_info$Result <- as.factor(J_std_vre_info$Result)
+```
+
+Let's check out if it had come out as intended as well as take a look at the total table structure
+
+```{r,message = FALSE}
+summary(J_std_vre_info)
+```
+
+Yes, it did. 
+The sum_click looks a little suspicious as it has a maximum value of 6977 (which is clicks by a student on any given day)
+
+```{r,message = FALSE}
+hist(unique(studentVle$sum_click), breaks = 100, xlab = "clicks", main = "Clicks frequency chart")
+```
+
+The distribution is heavily right skewed and this would mostly not affect our analysis.
+These possible outliers are few and far between and there is a remote chance the student 
+could have interacted with the platform for an extended period of time (Would have been highly unlikely if these were pages viewed instead of page clicks!) 
+
+Next up, we would like to explore how students perform for the different assessment tests.
+
+Before this, let's join the Student assessment table with the Assessesments table to obtain details about the test
+Now we combine it with student demographic table.
+
+```{r,message = FALSE}
+J_std_assmt <- inner_join(studentAssessment, assessments, by = NULL)
+J_stdinfo_assmt <- inner_join(J_std_assmt, studentInfo, by = NULL)
+
+```
+
+Our intention is to see how the students demographic information could possibly tell us something regarding how he/she performs for the different exam modules
+
+Before we get any insights from this data, we shall first take a look at the data structure again:
+
+```{r,message = FALSE}
+str(J_stdinfo_assmt,  strict.width = "wrap")
+```
+
+There are a few variables we ought to consider - imd_band, score, date which have missing values.
+
+Score, as we know from the data description, containes missing values owing to students not completing the assessment or dropping out.
+
+```{r,message = FALSE}
+J_stdinfo_assmt %>% filter(imd_band == "?") %>% group_by(imd_band) %>%  summarize(IMD_missing = n())
+J_stdinfo_assmt %>% filter(score == "?") %>% group_by(score) %>%  summarize(score_missing = n())
+J_stdinfo_assmt %>% filter(date == "?") %>% group_by(date) %>%  summarize(date_missing = n())
+```
+
+1. The date field is missing owing to it being on the last date of the module.
+2. The IMD_band missing fields comprises less than 5 % of the data
+  + We shall not remove it for now. Instead these can be filtered out while plotting its affect on        student test performances
+
+
+Now let us see how the performance of students vary by year and also by the modules in Feb/Oct:
+
+```{r,message = FALSE}
+
+J_stdinfo_assmt<- J_stdinfo_assmt %>% 
+                  mutate(Result = ifelse(final_result == 'Distinction'|final_result ==                                'Pass','Pass',ifelse(final_result == 'Withdrawn','Withdrawn','Fail')))
+
+J_stdinfo_assmt$Result = as.factor(J_stdinfo_assmt$Result)
+
+J_stdinfo_assmt %>% mutate(year = substr(code_presentation,1,4)) %>% 
+                    ggplot(aes(x = code_module, fill = Result)) + 
+                    geom_histogram(stat = "count") + 
+                    facet_wrap(~as.factor(year))
+```
+
+It is slightly hard to effectively compare between the modules. Lets compare proportions instead:
+
+```{r,message = FALSE}
+J_stdinfo_assmt %>% mutate(year = substr(code_presentation,1,4)) %>% 
+                    ggplot(aes(x = code_module, fill = Result)) + 
+                    geom_bar(position = "fill") + ylab("proportion") + 
+                    facet_wrap(~as.factor(year))
+```
+
+The performances pretty much seem comparable across the years with DDD seemingly the difficult course module among the six.
+
+Now let's see if there is any observable trend between the 3 classes of assessment types:
+The CMA, TMA and the Final exam
+
+```{r,message = FALSE}
+J_stdinfo_assmt  %>% ggplot(aes(x = code_module, fill = Result)) + 
+                     geom_bar(position = "fill") + ylab("proportion") + 
+                     facet_wrap(~assessment_type) +theme(axis.text.x = element_text(angle = 90))
+
+```
+
+We see only CCC and DDD modules have all three assessment types included in their structure.
+Given the plot, it's not much of a surprise to see a higher withdrawal proportion attrbuted to these two courses as well, which seem to have the highest failure rates as well
+
+AAA and EEE just have the TMA assessments, and these modules seem to have the lowest fail percentage of students
+
+
+Let us see how many students persist with the materials from start till finish for a particular year.
+Let's take 2014 at first, since 2013 does not have CCC module.
+
+```{r,message = FALSE}
+J_std_assmt  %>%  group_by(code_module,code_presentation,id_assessment,assessment_type) %>%  
+                  summarize(No.of.students.taking.assessment = n_distinct(id_student)) %>% 
+                  filter(substr(code_presentation,1,4) == "2014") %>% 
+                  ggplot(aes(x = id_assessment, y = No.of.students.taking.assessment, color =                           code_presentation)) + 
+                  geom_point()+theme(axis.text.x = element_text(angle = 90)) + facet_wrap(~code_module,scale = "free")
+
+
+J_std_assmt  %>%  group_by(code_module,code_presentation,id_assessment,assessment_type) %>%  
+                  summarize(No.of.students.taking.assessment = n_distinct(id_student)) %>% 
+                  filter(substr(code_presentation,1,4) == "2013") %>% 
+                  ggplot(aes(x = id_assessment, y = No.of.students.taking.assessment, color = assessment_type)) + 
+                  geom_point()+theme(axis.text.x = element_text(angle = 90)) + facet_wrap(~code_module,scale = "free")
+```
+
+There is a definite drop off in pretty much all course modules in 2014 (Feb and Oct sessions).
+
+The drop off is pretty stark in certain cases, like DDD, where its almost 50 % - probably owing to 
+the severity of the course as well as how many assessments there are in total within that module.
+
+```{r,message = FALSE}
+J_std_assmt  %>%  group_by(code_module,code_presentation,id_assessment,assessment_type) %>%  
+                  summarize(No.of.students.taking.assessment = n_distinct(id_student)) %>% 
+                  filter(substr(code_presentation,1,4) == "2014") %>% 
+                  ggplot(aes(x = id_assessment, y = No.of.students.taking.assessment, color = assessment_type)) + 
+                  geom_point()+theme(axis.text.x = element_text(angle = 90)) + facet_wrap(~code_module,scale = "free")
+```
+
+
+This shows us how the drop off is affected by the assessment type within each module.
+Again, there is no clear indicator to say a particular assessment type is clearly a cause for serious drop off in student participation in assessments.
+
+
+
+Now lets go ahead and check out some demographic information related to the students and see if they tell us anything important:
+
+```{r,message=FALSE}
+J_stdinfo_assmt %>% filter(score!= "?")  %>% group_by(gender,assessment_type , highest_education,code_module,code_presentation) %>%                                                                  summarize(score=mean(as.numeric(as.character(score)))) %>% ggplot(aes(x = highest_education, y = score)) + 
+                    geom_boxplot() + geom_jitter(position = position_jitter(width = .1, height = 0))+
+                    theme(axis.text.x = element_text(angle = 90))
+
+J_stdinfo_assmt %>% filter(score!= "?" & Result != "Withdrawn" & imd_band != "?") %>%                                     group_by(gender,assessment_type ,imd_band,                                                            highest_education,code_module,code_presentation,age_band) %>% 
+                    summarize(score = mean(as.numeric(as.character(score)))) %>% 
+                    ggplot(aes(x = imd_band, y = score)) + geom_boxplot() +  
+                    geom_jitter(position = position_jitter(width = .1, height = 0)) +
+                    theme(axis.text.x = element_text(angle = 90)) 
+
+J_stdinfo_assmt %>% filter(score!= "?" & Result != "Withdrawn" & imd_band != "?") %>%                                     group_by(gender,assessment_type ,imd_band,                                                            highest_education,code_module,code_presentation,age_band) %>% 
+                    summarize(score = mean(as.numeric(as.character(score)))) %>% 
+                    ggplot(aes(x = gender, y = score)) + 
+                    geom_boxplot() +
+                    geom_jitter(position = position_jitter(width = .1, height = 0)) +
+                    theme(axis.text.x = element_text(angle = 90)) 
+
+J_stdinfo_assmt %>% filter(score!= "?" & Result != "Withdrawn" & imd_band != "?") %>%
+                    group_by(gender,assessment_type ,imd_band,                                                            highest_education,code_module,code_presentation,age_band) %>% 
+                    summarize(score = mean(as.numeric(as.character(score)))) %>%     
+                    ggplot(aes(x = age_band, y = score)) + geom_boxplot() + 
+                    geom_jitter(position =   position_jitter(width = .1, height = 0)) +
+                    theme(axis.text.x =     element_text(angle = 90)) + facet_wrap(~code_module)
+
+```
+
+* The IMD band boxplot shows there is a general trend upwards in average score for the affluent sections of society    which seems intuitive considering the latter groups are starting off in an advantageous position as compared to groups less fortunate
+
+* The age band split was considered per course module to see if there were any particular courses     which the groups were showing any drastic difference.
+
+* All in all, the age group >55 seems to be doing better off in most cases (although it is a much     smaller sample size), which may not have been quite obvious.
+
+* There is not much to choose in terms of performance comparison by gender.
+
+* In terms of education level, again it is pretty intuitive with the PG students seeming to perform   the best 
+
+
+Let's explore how the students interacts with the VLE platform itself
+
+
+For the table 'studentVle', let us first rename the date field to 'date_interaction' to avoid any confusion with the date object.
+```{r,message = FALSE}
+colnames(studentVle)[5] <- "date_interaction"
+colnames(J_std_vre_info)[5] <- "date_interaction"
+
+J_std_vre_info  %>% filter(Result!= "Withdrawn") %>% 
+                    group_by(id_student,code_module,code_presentation,
+                    age_band,highest_education,Result) %>% 
+                    summarize(Avg.clicks = mean(sum_click), Date.of.interaction =                                         median(date_interaction)) %>% 
+                    ggplot(aes(x = Date.of.interaction, y = Avg.clicks, color = Result)) +                                geom_point() +
+                    theme(axis.text.x = element_text(angle = 90)) +facet_wrap(~code_module)
+
+```
+
+Although intuitive, the plot also confirms the theory that the more the students interact with the platform, the better they perform overall with the courses.
+It shows the average clicks per students in the course modules and years with respect to the median time they interacted with the materials (or in other words, how long they interacted with it)
+
+We have come quite some way in terms of understanding the data and how students perform with assessments and how they interact with the platform.
+
+Now it would be a good idea to see if we can bring this parameter to our student info and assessments table and see if we can build a model that can predict how well a student might perform on the tests.
+
+
+####3.Machine Learning
+
+Let us use a Random Forest model to help us with predicting the probability of a student failing a class or not.
+
+The Random Forest model usually requires little time to optimize and handles outliers, irrelevant variables pretty well
+
+
+```{r,message = FALSE}
+
+J_std_info_reg = inner_join(studentInfo,studentRegistration)
+
+```
+
+**Feature engineering:**
+
+The total number of clicks and time interacted with the platform are bound to be strong predictors 
+(Earlier plots confirm just as much. Also checked seperately usig RF model to verify)
+
+ * So it makes sense to create variables that assesses student engagment with the platform before the    course actually starts.
+ * Variable 1:  Total clicks per student/module/session before classes start
+ * Variable 2:  How many times he opens up the platform to interact before classes start.
+
+We call these variables
+  + prior_times_interacted
+  + prior_clicks
+
+```{r,message = FALSE}
+studentVle = studentVle %>% mutate(prior_times_interacted = ifelse(date_interaction <0, 1,0),                                     prior_clicks = ifelse(date_interaction<0,sum_click,0))
+
+sub_studentVle <- studentVle %>% group_by(code_module,code_presentation,id_student) %>% 
+                  summarize(prior_reg_clicks = sum(prior_clicks), prior_reg_times_opened =                              sum(prior_times_interacted))
+
+J_std_vre_info_reg <- left_join(J_std_info_reg , sub_studentVle, by = NULL)
+
+J_std_vre_info_reg<- J_std_vre_info_reg %>% 
+                     mutate(Result = ifelse(final_result == 'Distinction'|final_result ==                                  'Pass','Pass',ifelse(final_result == 'Withdrawn','Withdrawn','Fail')))
+
+J_std_vre_info_reg$Result = as.factor(J_std_vre_info_reg$Result)
+
+J_std_vre_info_reg = J_std_vre_info_reg %>% mutate(prior_reg_times_opened =                                                ifelse(is.na(prior_reg_times_opened), 0, prior_reg_times_opened)) 
+
+J_std_vre_info_reg = J_std_vre_info_reg %>% mutate(prior_reg_clicks = ifelse(is.na(prior_reg_clicks),                      0, prior_reg_clicks)) 
+
+
+```
+
+```{r,message = FALSE}
+str(J_std_vre_info_reg)
+```
+
+Looking at the structure of data points, it would be better to convert variable 'num_of_prev_attempts' to a factor (0 to 6)
+
+For now, we are going to treat this problem as a binary classfication model and try to predict students who passed or failed in their respective courses and period
+(Not considering withdrawn students at the moment as that can be considered a different problem in itself)
+
+
+```{r,message = FALSE}
+J_std_vre_info_reg$num_of_prev_attempts = as.factor(J_std_vre_info_reg$num_of_prev_attempts)
+J_std_vre_info_reg = J_std_vre_info_reg %>% filter(Result!= "Withdrawn") %>% droplevels
+J_std_vre_info_reg = J_std_vre_info_reg %>% filter(date_registration!= "?") %>%  droplevels
+J_std_vre_info_reg = J_std_vre_info_reg %>% filter(imd_band!= "?") %>%  droplevels
+
+J_std_vre_info_reg$date_registration =as.numeric(as.character(J_std_vre_info_reg$date_registration))
+
+train_sample = sample(nrow(J_std_vre_info_reg), size = nrow(J_std_vre_info_reg)*0.7)
+train_data = J_std_vre_info_reg[train_sample,]
+test_data =  J_std_vre_info_reg[-train_sample,]
+
+model = randomForest(y = train_data$Result, x = subset(train_data, select =                                               -c(Result,id_student,date_unregistration,final_result)),  
+                     ytest = test_data$Result,
+                     xtest = subset(test_data, select =                                                                   -c(Result,id_student,date_unregistration,final_result)),                         
+                     ntree = 100, mtry = 3, keep.forest = TRUE)
+
+model
+```
+
+So OOB rate and test error rate are pretty similar (~29 %), which signals our model is not over fitting.
+
+Accuracy is not great, but still reasonable.
+It is worthwhile to consider finding the best cut off point using ROCR 
+
+
+Now, lets see if we can get any insights out of this model
+
+```{r,message = FALSE}
+varImpPlot(model,2)
+```
+
+* The date of registration seem to be the most important predictor with it gauging the level of       enthusiasm each student holds for a particular course module.
+* Gender, age_band and disability hardly matters at all.
+
+
+Now let's check partial dependence plots for the Top 5 Variables:
+
+```{r,message = FALSE}
+
+op <- par(mfrow = c(2,2))
+partialPlot(model, train_data, date_registration, "Fail")
+partialPlot(model, train_data, region, "Fail")
+partialPlot(model, train_data, prior_reg_clicks, "Fail")
+partialPlot(model, train_data, imd_band, "Fail")
+partialPlot(model, train_data, prior_reg_times_opened, "Fail")
+
+
+```
+
+In partial dependence plots, we care mostly about the trend, not the actual y value.
+These plots show:
+  * Users who register pretty close or afterwards (intuitive), has a high failure rate.
+    They probably did not harbour any genuine ambition to complete the course
+    Users who registered way before actual dates also (almost a year ago) do not necessarily go on        to have high pass rates
+  * Students who engage reasonably (clicks and no.of.times opened) with VLE content before the actual     classes started seem to perform the best. 
+  * Perhaps understandably, imd_band indicates a clear trend with students with better living             conditions performing comparitively better 
+  * Region seems irrelevant with no clear trends
+  
+  
+Let's now build a simple decision tree and check some of the most important segments:
+
+```{r}
+tree = rpart(Result ~ code_module + code_presentation + gender + highest_education + region +                      age_band + imd_band + prior_reg_clicks + prior_reg_times_opened + disability+                         num_of_prev_attempts + studied_credits + date_registration, 
+             data = train_data, control = rpart.control(maxdepth = 3))
+
+tree
+
+```
+
+It confirms some of the theories we have already established using the results of the Partial dependence plots.
+Region does not appear here, which seems accurate, even if marked as an important predictor from the Random Forest model
+
+
+
+**Conclusions**:
+
+1. The students interacting a lot before course registration doesn't indicate anything, although a reasonable engagement bodes well for predicting performance
+2. Imd_band clearly shows a trend, with students from economically depraved backgrounds struggling than their relatively affluent colleagues
+3. CCC,DDD and to a lesser extent FFF seems to be difficult courses, also having large number of assessments as compared to the other three modules
+4. Existing educational qualifications definitely helps, with well qualified candidates performing better
+
+
+
+
+
